@@ -1,0 +1,25 @@
+# Name,    Type, SubType,  Offset,   Size,    Flags
+# ESP32 8MB Flash - Dual OTA Layout
+# Total: 8MB (0x800000)
+# Layout optimized for generic framework with OTA support
+
+# NVS - Non-volatile storage for WiFi, config, etc.
+nvs,       data, nvs,      0x9000,   0x6000,
+
+# OTA Data - Tracks which OTA partition is active
+otadata,   data, ota,      0xf000,   0x2000,
+
+# PHY Init - RF calibration data
+phy_init,  data, phy,      0x11000,  0x1000,
+
+# Factory App - Initial/recovery firmware (2MB)
+factory,   app,  factory,  0x20000,  0x200000,
+
+# OTA_0 - First OTA partition (2.5MB)
+ota_0,     app,  ota_0,    ,         0x280000,
+
+# OTA_1 - Second OTA partition (2.5MB)
+ota_1,     app,  ota_1,    ,         0x280000,
+
+# SPIFFS - File storage (832KB)
+storage,   data, spiffs,   ,         0xD0000,

@@ -1,0 +1,43 @@
+# ESP-IDF build artifacts
+build/
+sdkconfig
+sdkconfig.old
+dependencies.lock
+
+# Python bytecode
+*.pyc
+__pycache__/
+
+# Editor and IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Dependencies
+managed_components/
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.bak
+
+# NVS partition files (may contain sensitive data)
+nvs.bin
+
+# Certificates and keys (if stored locally)
+*.key
+*.pem
+*.crt
+
+# Local configuration overrides
+sdkconfig.local
+.env
+
+# OS-specific
+Thumbs.db
+desktop.ini
