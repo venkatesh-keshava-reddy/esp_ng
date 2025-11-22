@@ -1,36 +1,43 @@
-fix: allow HTTP UI startup during clock rollback with default password
+feat: implement config_store NVS abstraction layer
 
-Prevents permanent lockout when RTC resets after timestamp is stored.
+Implements schema-agnostic typed helpers for NVS storage operations.
 
-Problem:
-- Previous fix clamped elapsed_sec to SETUP_MODE_DURATION_SEC + 1 during rollback
-- This made elapsed_sec >= SETUP_MODE_DURATION_SEC, triggering the expired check
-- Expired check returns ESP_ERR_INVALID_STATE, blocking HTTP UI startup
-- Result: User still locked out - contradicted stated intent
-- Common on batteryless ESP32 devices after power loss
+Features:
+- NVS initialization with automatic no-free-pages handling
+- Typed operations: string, u32, blob
+- Namespace/key length validation (15 char limit)
+- Proper error propagation (ESP_ERR_NVS_NOT_FOUND for missing keys)
+- Buffer size validation with ESP_ERR_NVS_INVALID_LENGTH
+- Null-termination for string operations
+- Erase key functionality
+- Set-if-missing helpers for idempotent defaults
 
-Root cause analysis:
-Cannot reliably determine if setup window truly expired during clock rollback:
-- Clock at epoch (time=0) < stored timestamp (e.g., time=1700000000)
-- Actual elapsed time is unknown until SNTP resyncs
-- Safer to allow temporary access than permanent lockout
+Implementation details:
+- Open/close NVS handle per operation (thread-safe, no global state)
+- Validates namespace and key lengths against NVS limits
+- Comprehensive error handling with logging
+- Follows ESP-IDF NVS semantics exactly
 
-Solution:
-- Clock rollback: Fall through weak password check (don't return error)
-- Allows HTTP UI to start with default password during rollback
-- After time resyncs, proper elapsed time validation resumes
-- User can change password via HTTP UI during rollback period
-- If setup window was actually expired, next boot will block (after time sync)
+API:
+- config_store_init() - Initialize NVS flash (handles erase/retry)
+- config_store_get_str/set_str() - String operations
+- config_store_get_u32/set_u32() - u32 operations
+- config_store_get_blob/set_blob() - Binary data operations
+- config_store_erase_key() - Delete key
+- config_store_set_if_missing_str/u32() - Conditional set
 
-Code flow:
-1. Clock rollback detected → Log warning → Fall through (no return)
-2. Normal time + within window → Log setup mode → Fall through (no return)
-3. Normal time + expired → Log error → return ESP_ERR_INVALID_STATE (blocks UI)
+Testing:
+- Comprehensive unit tests for all operations
+- Roundtrip tests for each data type
+- Buffer size validation tests
+- Namespace/key validation tests
+- Set-if-missing behavior tests
+- Null-termination verification
 
-Security trade-off:
-- Accept temporary window extension during clock rollback
-- Better than permanent lockout requiring hardware/API intervention
-- Window auto-corrects after time resync
-
-Location: components/http_ui/http_ui.c:1531-1568
+Files:
+- components/config_store/config_store.c (450 lines)
+- components/config_store/include/config_store.h (38 lines)
+- components/config_store/test/test_config_store.c (249 lines)
+- components/config_store/CMakeLists.txt
+- components/config_store/test/CMakeLists.txt
 
