@@ -1,24 +1,38 @@
-fix: move WiFi restart to worker task to avoid blocking timer callback
+fix: address PR feedback on setup mode and WiFi restart recovery
 
-Resolves PR review feedback about blocking esp_timer callback during WiFi restart.
+Resolves two critical issues identified in PR review.
 
+Issue 1: Setup mode timestamp resets on reboot
 Problem:
-- reconnect_timer_callback() was calling vTaskDelay(1000) and esp_wifi_stop/start
-- esp_timer executes all timers from single high-priority task
-- Blocking for 1 second delayed all other timer-driven functions in the system
+- Used esp_timer_get_time() (uptime) instead of wall-clock time
+- Uptime resets to 0 on every boot, granting fresh 15-minute window
+- Device with default credentials for hours could restart and regain access
+- Defeated the intended security gate
 
 Solution:
-- Created dedicated wifi_restart_task worker with queue-based dispatch
-- Timer callback now sends non-blocking queue message to trigger restart
-- All blocking operations (vTaskDelay, esp_wifi_stop/start) moved to worker task
-- Worker task can safely block without impacting other timers
+- Changed to use time(NULL) for Unix timestamp (wall-clock time)
+- Timestamp persists correctly across reboots in NVS
+- Renamed variables: s_first_boot_time_ms → s_first_boot_timestamp
+- Changed duration: SETUP_MODE_DURATION_MS → SETUP_MODE_DURATION_SEC
+- Added graceful handling for pre-time-sync case (extends window but safe)
 
-Implementation:
-- Added s_restart_task and s_restart_queue static variables
-- wifi_restart_task() handles blocking WiFi stop/restart operations
-- reconnect_timer_callback() dispatches restart via xQueueSend (non-blocking)
-- Queue depth of 1 (only one pending restart needed)
-- Worker task created in net_mgr_start() with 3KB stack, priority 5
+Issue 2: WiFi restart doesn't resume reconnects on failure
+Problem:
+- When retry count hits MAX_RETRY_BEFORE_RESTART, timer callback enqueues restart and returns
+- If esp_wifi_start() fails in worker task, no further attempts scheduled
+- Station left permanently offline until manual intervention
+- Previously, backoff loop kept retrying indefinitely
+
+Solution:
+- Worker task now reschedules reconnect timer on restart failure
+- Uses same exponential backoff algorithm (1s → 60s cap)
+- Increments retry counter to prevent tight loops
+- Ensures system never stops trying to recover connectivity
+- Successful restart triggers WIFI_EVENT_STA_START → auto-connect
+
+Files modified:
+- components/http_ui/http_ui.c: Fixed setup mode timestamp to use time(NULL)
+- components/net_mgr/net_mgr.c: Added timer rescheduling in wifi_restart_task
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 

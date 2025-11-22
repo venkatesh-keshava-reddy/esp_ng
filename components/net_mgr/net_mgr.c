@@ -77,14 +77,33 @@ static void wifi_restart_task(void* arg)
             // Restart WiFi - critical failure if this doesn't work
             ret = esp_wifi_start();
             if (ret != ESP_OK) {
-                ESP_LOGE(TAG, "WiFi restart failed: %s - will retry on next attempt", esp_err_to_name(ret));
-                // Don't reset retry counter - will attempt restart again
-                // Increment so we don't get stuck in immediate restart loop
+                ESP_LOGE(TAG, "WiFi restart failed: %s - rescheduling reconnect attempt", esp_err_to_name(ret));
+                // Increment retry counter to prevent tight loop
                 s_retry_num++;
+
+                // Reschedule reconnect timer to retry the restart
+                // Use exponential backoff
+                uint64_t backoff_ms = (uint64_t)BACKOFF_BASE_MS << s_retry_num;
+                if (backoff_ms > BACKOFF_MAX_MS) {
+                    backoff_ms = BACKOFF_MAX_MS;
+                }
+
+                ESP_LOGI(TAG, "Retrying WiFi restart in %llu ms (attempt %d)", backoff_ms, s_retry_num + 1);
+
+                if (s_reconnect_timer) {
+                    esp_timer_stop(s_reconnect_timer);
+                    esp_err_t timer_ret = esp_timer_start_once(s_reconnect_timer, backoff_ms * 1000ULL);
+                    if (timer_ret != ESP_OK) {
+                        ESP_LOGE(TAG, "Failed to reschedule reconnect timer: %s", esp_err_to_name(timer_ret));
+                    }
+                }
             } else {
-                ESP_LOGI(TAG, "WiFi restarted successfully");
-                // Reset retry counter only on successful restart
+                ESP_LOGI(TAG, "WiFi restarted successfully - attempting connection");
+                // Reset retry counter on successful restart
                 s_retry_num = 0;
+
+                // WiFi start triggers WIFI_EVENT_STA_START which will call esp_wifi_connect()
+                // No need to manually schedule reconnect here
             }
         }
     }

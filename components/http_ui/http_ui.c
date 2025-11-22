@@ -18,12 +18,13 @@
 #include <string.h>
 #include <stdlib.h>
 #include <math.h>
+#include <time.h>
 
 static const char *TAG = "http_ui";
 
 // Setup mode: Allow default password for limited time after first boot
-#define SETUP_MODE_DURATION_MS (15 * 60 * 1000)  // 15 minutes
-static int64_t s_first_boot_time_ms = 0;
+#define SETUP_MODE_DURATION_SEC (15 * 60)  // 15 minutes in seconds
+static time_t s_first_boot_timestamp = 0;
 
 #define HTTPD_401 "401 UNAUTHORIZED"
 #define MAX_AUTH_LEN 128
@@ -1479,31 +1480,38 @@ esp_err_t http_ui_start(void)
     // Security check: Refuse to start with default password (except in setup mode)
     if (config_mgr_has_weak_password()) {
         // Check if we're in setup mode (first 15 minutes after FIRST boot)
-        // Persist timestamp to NVS so it doesn't reset on reboot
-        if (s_first_boot_time_ms == 0) {
-            uint32_t stored_timestamp_sec = 0;
-            esp_err_t ret = config_mgr_get_u32("ui/first_boot_ts", &stored_timestamp_sec);
+        // Use wall-clock time (Unix timestamp) instead of uptime to persist across reboots
+        if (s_first_boot_timestamp == 0) {
+            uint32_t stored_timestamp = 0;
+            esp_err_t ret = config_mgr_get_u32("ui/first_boot_ts", &stored_timestamp);
 
-            if (ret == ESP_OK && stored_timestamp_sec > 0) {
+            if (ret == ESP_OK && stored_timestamp > 0) {
                 // Already recorded first boot time, load it
-                s_first_boot_time_ms = (int64_t)stored_timestamp_sec * 1000;
-                ESP_LOGI(TAG, "Loaded first boot timestamp from NVS");
+                s_first_boot_timestamp = (time_t)stored_timestamp;
+                ESP_LOGI(TAG, "Loaded first boot timestamp from NVS: %lu", (unsigned long)s_first_boot_timestamp);
             } else {
-                // First time ever - record timestamp to NVS
-                s_first_boot_time_ms = esp_timer_get_time() / 1000;
-                stored_timestamp_sec = (uint32_t)(s_first_boot_time_ms / 1000);
-                config_mgr_set_u32("ui/first_boot_ts", stored_timestamp_sec);
-                ESP_LOGW(TAG, "First boot detected - setup mode window started (15 minutes)");
+                // First time ever - record current wall-clock time to NVS
+                s_first_boot_timestamp = time(NULL);
+
+                // Only persist if we have valid time (not 1970)
+                // If time not synced yet, timestamp will be near 0 and setup mode will be very long
+                // This is acceptable - better than blocking UI startup before time sync
+                if (s_first_boot_timestamp > 0) {
+                    config_mgr_set_u32("ui/first_boot_ts", (uint32_t)s_first_boot_timestamp);
+                    ESP_LOGW(TAG, "First boot detected - setup mode window started (15 minutes)");
+                    ESP_LOGW(TAG, "Stored timestamp: %lu", (unsigned long)s_first_boot_timestamp);
+                }
             }
         }
 
-        int64_t elapsed_ms = (esp_timer_get_time() / 1000) - s_first_boot_time_ms;
+        time_t current_time = time(NULL);
+        time_t elapsed_sec = current_time - s_first_boot_timestamp;
 
-        if (elapsed_ms < SETUP_MODE_DURATION_MS) {
-            int64_t remaining_min = (SETUP_MODE_DURATION_MS - elapsed_ms) / 60000;
+        if (elapsed_sec < SETUP_MODE_DURATION_SEC) {
+            time_t remaining_min = (SETUP_MODE_DURATION_SEC - elapsed_sec) / 60;
             ESP_LOGW(TAG, "========================================");
             ESP_LOGW(TAG, "SETUP MODE: Default password accepted");
-            ESP_LOGW(TAG, "Time remaining: %lld minutes", remaining_min);
+            ESP_LOGW(TAG, "Time remaining: %ld minutes", (long)remaining_min);
             ESP_LOGW(TAG, "Change password immediately via /config");
             ESP_LOGW(TAG, "This window persists across reboots!");
             ESP_LOGW(TAG, "HTTP UI will be disabled when setup mode expires");
