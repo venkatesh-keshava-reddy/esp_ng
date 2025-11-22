@@ -30,10 +30,13 @@
  * @endcode
  *
  * Critical tasks that should register:
- * - net_mgr
- * - ntrip_client
- * - udp_broadcast
- * - http_ui (request handler task)
+ * - net_mgr (if it has a background task)
+ * - ntrip_client (connection management task)
+ * - udp_broadcast (broadcast_task)
+ *
+ * Tasks excluded (with rationale):
+ * - http_ui: Uses ESP-IDF httpd thread pool with built-in timeout management,
+ *   no long-running dedicated task that could block indefinitely
  */
 #pragma once
 #include "esp_err.h"

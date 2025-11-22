@@ -77,6 +77,12 @@ static esp_err_t load_config(void)
     if (ret != ESP_OK || strlen(s_server_primary) == 0) {
         ESP_LOGW(TAG, "Primary NTP server not configured, using default: pool.ntp.org");
         strncpy(s_server_primary, "pool.ntp.org", sizeof(s_server_primary) - 1);
+    } else {
+        // Validate server string (basic hostname/IP check)
+        if (strlen(s_server_primary) > 63) {
+            ESP_LOGW(TAG, "Primary NTP server name too long, using default");
+            strncpy(s_server_primary, "pool.ntp.org", sizeof(s_server_primary) - 1);
+        }
     }
 
     // Load secondary server (NVS key: sntp/server2)
@@ -84,6 +90,12 @@ static esp_err_t load_config(void)
     if (ret != ESP_OK || strlen(s_server_secondary) == 0) {
         ESP_LOGW(TAG, "Secondary NTP server not configured, using default: time.google.com");
         strncpy(s_server_secondary, "time.google.com", sizeof(s_server_secondary) - 1);
+    } else {
+        // Validate server string (basic hostname/IP check)
+        if (strlen(s_server_secondary) > 63) {
+            ESP_LOGW(TAG, "Secondary NTP server name too long, using default");
+            strncpy(s_server_secondary, "time.google.com", sizeof(s_server_secondary) - 1);
+        }
     }
 
     // Load timezone

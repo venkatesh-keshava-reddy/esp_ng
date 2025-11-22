@@ -9,6 +9,7 @@
 #include "net_mgr.h"
 #include "diag.h"
 #include "version.h"
+#include "wdt_mgr.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -29,6 +30,10 @@ static const char *TAG = "udp_broadcast";
 #define MIN_FREQ_HZ 0.2f
 #define MAX_FREQ_HZ 5.0f
 #define MAX_PAYLOAD_SIZE 512
+
+// Queue configuration (tunable for burst handling)
+#define DEFAULT_QUEUE_SIZE 10
+#define MAX_QUEUE_SIZE 50
 
 // State
 static esp_timer_handle_t s_timer = NULL;
@@ -388,6 +393,7 @@ static void broadcast_timer_callback(void* arg)
 /**
  * Dedicated task for UDP broadcast
  * Handles actual network I/O separately from timer callbacks
+ * Registered with watchdog manager to detect stuck states
  */
 static void broadcast_task(void* arg)
 {
@@ -396,7 +402,17 @@ static void broadcast_task(void* arg)
 
     ESP_LOGI(TAG, "Broadcast task started");
 
+    // Register with watchdog (max expected delay: 1s queue wait + 100ms mutex + send time)
+    esp_err_t ret = wdt_mgr_register_task("udp_broadcast", NULL, 5000);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to register with watchdog: %s", esp_err_to_name(ret));
+        // Continue anyway - non-critical for operation
+    }
+
     while (s_task_should_run) {
+        // Feed watchdog before potentially blocking operations
+        wdt_mgr_feed("udp_broadcast");
+
         // Wait for timer callback to signal (wake periodically to check stop flag)
         if (xQueueReceive(s_broadcast_queue, &trigger, pdMS_TO_TICKS(1000)) == pdTRUE) {
             // Lock mutex for thread safety
@@ -413,6 +429,9 @@ static void broadcast_task(void* arg)
             break;
         }
     }
+
+    // Unregister from watchdog before exiting
+    wdt_mgr_unregister_task("udp_broadcast");
 
     s_broadcast_task = NULL;
     ESP_LOGI(TAG, "Broadcast task exiting");
@@ -480,11 +499,20 @@ esp_err_t udp_broadcast_start(void)
 
     // Create queue for timer->task communication
     if (!s_broadcast_queue) {
-        s_broadcast_queue = xQueueCreate(10, sizeof(uint8_t));
+        // Load queue size from config (allow bursts to be handled)
+        uint32_t queue_size = DEFAULT_QUEUE_SIZE;
+        config_mgr_get_u32("udp/queue_size", &queue_size);
+
+        // Clamp to reasonable limits
+        if (queue_size < 1) queue_size = 1;
+        if (queue_size > MAX_QUEUE_SIZE) queue_size = MAX_QUEUE_SIZE;
+
+        s_broadcast_queue = xQueueCreate(queue_size, sizeof(uint8_t));
         if (!s_broadcast_queue) {
             ESP_LOGE(TAG, "Failed to create broadcast queue");
             return ESP_ERR_NO_MEM;
         }
+        ESP_LOGI(TAG, "Broadcast queue created (size: %lu)", queue_size);
     }
 
     // Create dedicated broadcast task
@@ -541,6 +569,33 @@ esp_err_t udp_broadcast_start(void)
     }
     config_mgr_get_u32("udp/ttl", &ttl);
     config_mgr_get_u32("udp/mode", &mode);
+
+    // Validate configuration at load time
+    // Clamp port to valid range
+    if (port == 0 || port > 65535) {
+        ESP_LOGW(TAG, "Invalid port %lu, using default 5005", port);
+        port = 5005;
+    }
+
+    // Validate address format
+    struct in_addr test_addr;
+    if (strlen(addr) == 0 || inet_aton(addr, &test_addr) == 0) {
+        ESP_LOGE(TAG, "Invalid UDP address: '%s'", addr);
+        xSemaphoreGive(s_mutex);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    // Validate mode
+    if (mode > UDP_MODE_MULTICAST) {
+        ESP_LOGW(TAG, "Invalid mode %lu, using broadcast", mode);
+        mode = UDP_MODE_BROADCAST;
+    }
+
+    // Clamp TTL
+    if (ttl == 0 || ttl > 255) {
+        ESP_LOGW(TAG, "Invalid TTL %lu, using 1", ttl);
+        ttl = 1;
+    }
 
     // Convert millihertz to Hz for validation
     float freq_hz = (float)freq_mhz / 1000.0f;

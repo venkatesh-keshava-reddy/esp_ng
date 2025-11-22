@@ -14,6 +14,8 @@
 #include "lwip/inet.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
+#include "freertos/task.h"
+#include "freertos/queue.h"
 #include <string.h>
 
 static const char *TAG = "net_mgr";
@@ -21,15 +23,20 @@ static const char *TAG = "net_mgr";
 // Event bits for connection state
 #define WIFI_CONNECTED_BIT BIT0
 
-// Reconnection parameters (exponential backoff, continuous)
+// Reconnection parameters (exponential backoff with cap)
 #define BACKOFF_BASE_MS    1000
 #define BACKOFF_MAX_MS     60000
+#define MAX_RETRY_BEFORE_RESTART 20  // Full WiFi restart after 20 attempts
 
 static esp_netif_t* s_netif = NULL;
 static EventGroupHandle_t s_wifi_event_group = NULL;
 static esp_timer_handle_t s_reconnect_timer = NULL;
 static int s_retry_num = 0;
 static bool s_is_connected = false;
+
+// WiFi restart worker task (to avoid blocking timer callback)
+static TaskHandle_t s_restart_task = NULL;
+static QueueHandle_t s_restart_queue = NULL;
 
 // Credential staging infrastructure
 #define CRED_STAGING_CONNECTED_BIT   BIT0
@@ -43,14 +50,89 @@ static volatile bool s_cred_staging_active = false;
 static volatile wifi_err_reason_t s_cred_staging_fail_reason = WIFI_REASON_UNSPECIFIED;
 
 /**
+ * WiFi restart worker task
+ * Handles blocking WiFi stop/restart operations outside of timer context
+ */
+static void wifi_restart_task(void* arg)
+{
+    (void)arg;
+    uint8_t trigger;
+
+    ESP_LOGI(TAG, "WiFi restart worker task started");
+
+    while (1) {
+        // Wait for restart trigger from timer callback
+        if (xQueueReceive(s_restart_queue, &trigger, portMAX_DELAY) == pdTRUE) {
+            ESP_LOGW(TAG, "Executing WiFi restart in worker task");
+
+            // Stop WiFi - log but continue if it fails (may already be stopped)
+            esp_err_t ret = esp_wifi_stop();
+            if (ret != ESP_OK && ret != ESP_ERR_WIFI_NOT_STARTED) {
+                ESP_LOGW(TAG, "WiFi stop failed: %s (continuing anyway)", esp_err_to_name(ret));
+            }
+
+            // Brief delay for cleanup (safe to block here - we're in dedicated task)
+            vTaskDelay(pdMS_TO_TICKS(1000));
+
+            // Restart WiFi - critical failure if this doesn't work
+            ret = esp_wifi_start();
+            if (ret != ESP_OK) {
+                ESP_LOGE(TAG, "WiFi restart failed: %s - rescheduling reconnect attempt", esp_err_to_name(ret));
+                // Increment retry counter to prevent tight loop
+                s_retry_num++;
+
+                // Reschedule reconnect timer to retry the restart
+                // Use exponential backoff
+                uint64_t backoff_ms = (uint64_t)BACKOFF_BASE_MS << s_retry_num;
+                if (backoff_ms > BACKOFF_MAX_MS) {
+                    backoff_ms = BACKOFF_MAX_MS;
+                }
+
+                ESP_LOGI(TAG, "Retrying WiFi restart in %llu ms (attempt %d)", backoff_ms, s_retry_num + 1);
+
+                if (s_reconnect_timer) {
+                    esp_timer_stop(s_reconnect_timer);
+                    esp_err_t timer_ret = esp_timer_start_once(s_reconnect_timer, backoff_ms * 1000ULL);
+                    if (timer_ret != ESP_OK) {
+                        ESP_LOGE(TAG, "Failed to reschedule reconnect timer: %s", esp_err_to_name(timer_ret));
+                    }
+                }
+            } else {
+                ESP_LOGI(TAG, "WiFi restarted successfully - attempting connection");
+                // Reset retry counter on successful restart
+                s_retry_num = 0;
+
+                // WiFi start triggers WIFI_EVENT_STA_START which will call esp_wifi_connect()
+                // No need to manually schedule reconnect here
+            }
+        }
+    }
+}
+
+/**
  * Timer callback for reconnection attempts
- * Runs in timer task context, not event loop - safe to call esp_wifi_connect()
+ * Runs in timer task context - must not block!
  */
 static void reconnect_timer_callback(void* arg)
 {
     (void)arg;
 
-    ESP_LOGI(TAG, "Attempting reconnection (retry %d)", s_retry_num + 1);
+    // Check if we've exceeded max retries - dispatch WiFi restart to worker task
+    if (s_retry_num >= MAX_RETRY_BEFORE_RESTART) {
+        ESP_LOGW(TAG, "Max retry attempts (%d) exceeded, requesting WiFi restart", MAX_RETRY_BEFORE_RESTART);
+
+        // Signal worker task to perform restart (non-blocking from timer context)
+        if (s_restart_queue) {
+            uint8_t trigger = 1;
+            BaseType_t result = xQueueSend(s_restart_queue, &trigger, 0);
+            if (result != pdTRUE) {
+                ESP_LOGW(TAG, "Restart queue full, restart already pending");
+            }
+        }
+        return;
+    }
+
+    ESP_LOGI(TAG, "Attempting reconnection (retry %d/%d)", s_retry_num + 1, MAX_RETRY_BEFORE_RESTART);
     esp_err_t ret = esp_wifi_connect();
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "esp_wifi_connect failed: %s", esp_err_to_name(ret));
@@ -181,6 +263,31 @@ esp_err_t net_mgr_start(void)
         s_wifi_event_group = xEventGroupCreate();
         if (!s_wifi_event_group) {
             ESP_LOGE(TAG, "Failed to create event group");
+            return ESP_ERR_NO_MEM;
+        }
+    }
+
+    // Create WiFi restart queue
+    if (!s_restart_queue) {
+        s_restart_queue = xQueueCreate(1, sizeof(uint8_t));  // Queue depth 1 (only need one pending restart)
+        if (!s_restart_queue) {
+            ESP_LOGE(TAG, "Failed to create restart queue");
+            return ESP_ERR_NO_MEM;
+        }
+    }
+
+    // Create WiFi restart worker task
+    if (!s_restart_task) {
+        BaseType_t task_ret = xTaskCreate(
+            wifi_restart_task,
+            "wifi_restart",
+            3072,  // 3KB stack
+            NULL,
+            5,     // Priority 5 (normal)
+            &s_restart_task
+        );
+        if (task_ret != pdPASS) {
+            ESP_LOGE(TAG, "Failed to create WiFi restart task");
             return ESP_ERR_NO_MEM;
         }
     }

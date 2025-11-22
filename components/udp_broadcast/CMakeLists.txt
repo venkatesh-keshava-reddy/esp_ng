@@ -9,4 +9,5 @@ idf_component_register(
         net_mgr
         diag
         version
+        wdt_mgr
 )
