@@ -1,43 +1,29 @@
-feat: implement config_store NVS abstraction layer
+feat: integrate config_store into app_startup
 
-Implements schema-agnostic typed helpers for NVS storage operations.
+Adds config_store initialization to the generic startup flow.
 
-Features:
-- NVS initialization with automatic no-free-pages handling
-- Typed operations: string, u32, blob
-- Namespace/key length validation (15 char limit)
-- Proper error propagation (ESP_ERR_NVS_NOT_FOUND for missing keys)
-- Buffer size validation with ESP_ERR_NVS_INVALID_LENGTH
-- Null-termination for string operations
-- Erase key functionality
-- Set-if-missing helpers for idempotent defaults
+Changes:
+- Added config_store_init() in app_startup Phase 1 (before config_mgr)
+- Removed redundant nvs_flash_init() from main.c (now handled by config_store)
+- Added config_store dependency to app_startup CMakeLists.txt
 
-Implementation details:
-- Open/close NVS handle per operation (thread-safe, no global state)
-- Validates namespace and key lengths against NVS limits
-- Comprehensive error handling with logging
-- Follows ESP-IDF NVS semantics exactly
+Startup order (Phase 1):
+1. config_store_init() - Initialize NVS with auto-erase handling
+2. event_bus_init() - Event system
+3. config_mgr_init() - Configuration manager (will use config_store later)
+4. wdt_mgr_init() - Watchdog manager
 
-API:
-- config_store_init() - Initialize NVS flash (handles erase/retry)
-- config_store_get_str/set_str() - String operations
-- config_store_get_u32/set_u32() - u32 operations
-- config_store_get_blob/set_blob() - Binary data operations
-- config_store_erase_key() - Delete key
-- config_store_set_if_missing_str/u32() - Conditional set
+Rationale:
+- config_store provides standalone NVS initialization
+- config_mgr will eventually migrate to use config_store APIs
+- Both components coexist during transition period
+- NVS init moved to config_store for better encapsulation
 
-Testing:
-- Comprehensive unit tests for all operations
-- Roundtrip tests for each data type
-- Buffer size validation tests
-- Namespace/key validation tests
-- Set-if-missing behavior tests
-- Null-termination verification
+Files modified:
+- components/app_startup/app_startup.c
+- components/app_startup/CMakeLists.txt
+- main/main.c
 
-Files:
-- components/config_store/config_store.c (450 lines)
-- components/config_store/include/config_store.h (38 lines)
-- components/config_store/test/test_config_store.c (249 lines)
-- components/config_store/CMakeLists.txt
-- components/config_store/test/CMakeLists.txt
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
 
+Co-Authored-By: Claude <noreply@anthropic.com>
