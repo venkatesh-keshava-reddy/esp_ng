@@ -1,40 +1,25 @@
-feat: implement feedback improvements for production readiness
+fix: move WiFi restart to worker task to avoid blocking timer callback
 
-Addresses additional feedback items for improved reliability and usability:
+Resolves PR review feedback about blocking esp_timer callback during WiFi restart.
 
-1. UDP Broadcast Improvements:
-   - Log level already at DEBUG for routine sends (reduces flash wear)
-   - Made queue size configurable via udp/queue_size (default: 10, max: 50)
-   - Allows handling burst scenarios without dropping packets
+Problem:
+- reconnect_timer_callback() was calling vTaskDelay(1000) and esp_wifi_stop/start
+- esp_timer executes all timers from single high-priority task
+- Blocking for 1 second delayed all other timer-driven functions in the system
 
-2. Network Manager Enhancements:
-   - Cap retry attempts at 20 before full WiFi restart
-   - Prevents long-term stuck states during network issues
-   - Automatic recovery mechanism for persistent failures
-   - Defensive error handling for WiFi restart in timer context
-   - Handles ESP_ERR_WIFI_NOT_STARTED gracefully
-   - Incremental retry on restart failure to prevent tight loops
+Solution:
+- Created dedicated wifi_restart_task worker with queue-based dispatch
+- Timer callback now sends non-blocking queue message to trigger restart
+- All blocking operations (vTaskDelay, esp_wifi_stop/start) moved to worker task
+- Worker task can safely block without impacting other timers
 
-3. Watchdog Coverage:
-   - Added watchdog registration for UDP broadcast_task
-   - HTTP UI excluded with clear rationale (uses ESP-IDF httpd thread pool)
-   - Documented exclusion criteria in wdt_mgr.h
+Implementation:
+- Added s_restart_task and s_restart_queue static variables
+- wifi_restart_task() handles blocking WiFi stop/restart operations
+- reconnect_timer_callback() dispatches restart via xQueueSend (non-blocking)
+- Queue depth of 1 (only one pending restart needed)
+- Worker task created in net_mgr_start() with 3KB stack, priority 5
 
-4. HTTP UI Setup Mode:
-   - Implemented 15-minute setup mode after first boot
-   - Persists timestamp to NVS (survives reboots)
-   - Allows default password for initial configuration only
-   - Reduces support friction while maintaining security
-   - Clear warnings and countdown timer in status endpoint
-   - Setup window doesn't reset on power-cycle
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
 
-5. Configuration Validation:
-   - UDP: Validate addr/port/mode/ttl at load time
-   - SNTP: Validate server hostname lengths
-   - Prevents runtime failures and noisy retry loops
-   - Automatic fallback to sane defaults
-
-All changes maintain backward compatibility with existing configurations.
-
-Generated with Claude Code
 Co-Authored-By: Claude <noreply@anthropic.com>
