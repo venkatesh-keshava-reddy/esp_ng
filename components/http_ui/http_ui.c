@@ -1527,24 +1527,36 @@ esp_err_t http_ui_start(void)
         }
 
         time_t current_time = time(NULL);
-        time_t elapsed_sec;
 
-        // Clamp negative elapsed time (clock reset backwards)
-        // Treat rollback as infinite elapsed time (setup window expired)
-        // This allows HTTP UI to start so user can change password via API
+        // Handle clock rollback (clock reset backwards after valid timestamp stored)
+        // Can't validate actual elapsed time, so allow HTTP UI with default password
+        // Once time resyncs, proper validation will resume
         if (current_time < s_first_boot_timestamp) {
             ESP_LOGW(TAG, "========================================");
-            ESP_LOGW(TAG, "Clock reset detected (current: %lu < stored: %lu)",
+            ESP_LOGW(TAG, "Clock rollback detected (current: %lu < stored: %lu)",
                      (unsigned long)current_time, (unsigned long)s_first_boot_timestamp);
-            ESP_LOGW(TAG, "Treating as setup window expired until time resyncs");
+            ESP_LOGW(TAG, "Cannot validate setup window - allowing HTTP UI with default password");
+            ESP_LOGW(TAG, "SECURITY: Change password immediately!");
+            ESP_LOGW(TAG, "Proper validation will resume after time sync");
             ESP_LOGW(TAG, "========================================");
-            // Clamp to large value so setup window is considered expired
-            elapsed_sec = SETUP_MODE_DURATION_SEC + 1;
+            // Can't determine if setup window expired - allow access until time resyncs
+            // This is safer than locking user out permanently
+            // Fall through to allow HTTP UI startup (skip the expired check)
         } else {
-            elapsed_sec = current_time - s_first_boot_timestamp;
-        }
+            // Normal case: valid time, can calculate elapsed time
+            time_t elapsed_sec = current_time - s_first_boot_timestamp;
 
-        if (elapsed_sec < SETUP_MODE_DURATION_SEC) {
+            if (elapsed_sec >= SETUP_MODE_DURATION_SEC) {
+                // Setup window has expired
+                ESP_LOGE(TAG, "========================================");
+                ESP_LOGE(TAG, "SECURITY ERROR: HTTP UI disabled");
+                ESP_LOGE(TAG, "Setup mode expired - default password 'admin' not allowed");
+                ESP_LOGE(TAG, "Change password via config_mgr API to enable HTTP UI");
+                ESP_LOGE(TAG, "========================================");
+                return ESP_ERR_INVALID_STATE;
+            }
+
+            // Setup window still active
             time_t remaining_min = (SETUP_MODE_DURATION_SEC - elapsed_sec) / 60;
             ESP_LOGW(TAG, "========================================");
             ESP_LOGW(TAG, "SETUP MODE: Default password accepted");
@@ -1553,13 +1565,6 @@ esp_err_t http_ui_start(void)
             ESP_LOGW(TAG, "This window persists across reboots!");
             ESP_LOGW(TAG, "HTTP UI will be disabled when setup mode expires");
             ESP_LOGW(TAG, "========================================");
-        } else {
-            ESP_LOGE(TAG, "========================================");
-            ESP_LOGE(TAG, "SECURITY ERROR: HTTP UI disabled");
-            ESP_LOGE(TAG, "Setup mode expired - default password 'admin' not allowed");
-            ESP_LOGE(TAG, "Change password via config_mgr API to enable HTTP UI");
-            ESP_LOGE(TAG, "========================================");
-            return ESP_ERR_INVALID_STATE;
         }
     }
 

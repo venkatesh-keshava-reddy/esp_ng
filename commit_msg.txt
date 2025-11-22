@@ -1,28 +1,36 @@
-fix: clamp clock rollback instead of blocking HTTP UI startup
+fix: allow HTTP UI startup during clock rollback with default password
 
-Prevents deadlock when RTC resets after valid timestamp is stored.
+Prevents permanent lockout when RTC resets after timestamp is stored.
 
 Problem:
-- When stored first_boot_timestamp exists and clock resets to epoch (before SNTP)
-- Previous code returned ESP_ERR_INVALID_STATE, blocking http_ui_start
-- app_startup only calls http_ui_start once (doesn't retry after time sync)
-- Result: HTTP UI permanently disabled, user locked out with default password
-- No way to change password because UI never starts
-- Common scenario: power loss on batteryless ESP32 devices
+- Previous fix clamped elapsed_sec to SETUP_MODE_DURATION_SEC + 1 during rollback
+- This made elapsed_sec >= SETUP_MODE_DURATION_SEC, triggering the expired check
+- Expired check returns ESP_ERR_INVALID_STATE, blocking HTTP UI startup
+- Result: User still locked out - contradicted stated intent
+- Common on batteryless ESP32 devices after power loss
+
+Root cause analysis:
+Cannot reliably determine if setup window truly expired during clock rollback:
+- Clock at epoch (time=0) < stored timestamp (e.g., time=1700000000)
+- Actual elapsed time is unknown until SNTP resyncs
+- Safer to allow temporary access than permanent lockout
 
 Solution:
-- Treat clock rollback as "setup window expired" instead of fatal error
-- Clamp elapsed_sec to SETUP_MODE_DURATION_SEC + 1 when rollback detected
-- This makes elapsed_sec >= SETUP_MODE_DURATION_SEC, failing the setup check
-- HTTP UI still starts but blocks due to default password (existing behavior)
-- User can change password via config_mgr API
-- After time resyncs, proper elapsed time will be calculated
-- Changed log level from ERROR to WARN for rollback detection
+- Clock rollback: Fall through weak password check (don't return error)
+- Allows HTTP UI to start with default password during rollback
+- After time resyncs, proper elapsed time validation resumes
+- User can change password via HTTP UI during rollback period
+- If setup window was actually expired, next boot will block (after time sync)
 
-Behavior:
-- Clock rollback: HTTP UI starts but blocks on default password (must use API)
-- Within setup window: HTTP UI accepts default password with countdown
-- After setup window: HTTP UI blocks on default password (must use API)
+Code flow:
+1. Clock rollback detected → Log warning → Fall through (no return)
+2. Normal time + within window → Log setup mode → Fall through (no return)
+3. Normal time + expired → Log error → return ESP_ERR_INVALID_STATE (blocks UI)
 
-Location: components/http_ui/http_ui.c:1531-1542
+Security trade-off:
+- Accept temporary window extension during clock rollback
+- Better than permanent lockout requiring hardware/API intervention
+- Window auto-corrects after time resync
+
+Location: components/http_ui/http_ui.c:1531-1568
 
