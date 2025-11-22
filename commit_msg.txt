@@ -1,18 +1,32 @@
-fix: update status endpoint to use new setup-mode timestamp variables
+fix: clamp setup mode window when clock resets backwards
 
-The status handler still referenced the old variable names that were renamed
-in the previous commit, causing a compilation failure.
+Prevents indefinite default-password access when RTC is unsynchronized.
 
 Problem:
-- Status endpoint referenced s_first_boot_time_ms (undefined)
-- Status endpoint referenced SETUP_MODE_DURATION_MS (undefined)
-- Build failed due to undefined symbols
-- Setup mode logic was never executed
+- Setup mode calculates elapsed_sec = time(NULL) - s_first_boot_timestamp
+- On batteryless ESP32 devices, clock starts at epoch 0 before SNTP sync
+- If stored timestamp exists, current_time < s_first_boot_timestamp
+- This makes elapsed_sec negative, which passes the < SETUP_MODE_DURATION_SEC check
+- Result: HTTP UI accepts default password indefinitely on every cold boot
+- Defeats the intended one-time 15-minute security window
 
 Solution:
-- Updated to s_first_boot_timestamp (time_t)
-- Updated to SETUP_MODE_DURATION_SEC (seconds)
-- Changed calculations from milliseconds to seconds
-- Changed format specifiers: %lld → %ld for time_t
+1. First boot validation:
+   - Only start setup window timer if time > 2020-01-01 (timestamp > 1577836800)
+   - Prevents storing epoch timestamps that would cause issues
+   - If time not synced: allow access but don't start timer (wait for SNTP)
 
-Location: components/http_ui/http_ui.c:568-570 (status_handler)
+2. Clock reset detection:
+   - Check if current_time < s_first_boot_timestamp before calculating elapsed
+   - Block HTTP UI startup with clear error message
+   - Prevents access after clock reset until time resyncs
+
+3. Status endpoint:
+   - Added same clock reset detection in status handler
+   - Shows "Clock reset detected! Waiting for time sync" warning
+   - Marks setup_mode as false when clock reset detected
+
+Files modified:
+- components/http_ui/http_ui.c:1508-1512 (http_ui_start)
+- components/http_ui/http_ui.c:568-570 (status_handler)
+

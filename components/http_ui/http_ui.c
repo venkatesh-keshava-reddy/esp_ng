@@ -567,23 +567,34 @@ static esp_err_t status_get_handler(httpd_req_t* req)
     if (config_mgr_has_weak_password()) {
         if (s_first_boot_timestamp > 0) {
             time_t current_time = time(NULL);
-            time_t elapsed_sec = current_time - s_first_boot_timestamp;
-            time_t remaining_sec = SETUP_MODE_DURATION_SEC - elapsed_sec;
 
-            if (remaining_sec > 0) {
-                char warning[128];
-                snprintf(warning, sizeof(warning),
-                        "SETUP MODE: Default password active. %ld min remaining. Change password now!",
-                        (long)(remaining_sec / 60));
-                cJSON_AddStringToObject(root, "security_warning", warning);
-                cJSON_AddBoolToObject(root, "setup_mode", true);
-            } else {
+            // Handle clock reset (current time before stored timestamp)
+            if (current_time < s_first_boot_timestamp) {
                 cJSON_AddStringToObject(root, "security_warning",
-                    "CRITICAL: Setup mode expired. HTTP UI will be disabled on next restart!");
+                    "Clock reset detected! Waiting for time sync. Change password now!");
                 cJSON_AddBoolToObject(root, "setup_mode", false);
+            } else {
+                time_t elapsed_sec = current_time - s_first_boot_timestamp;
+                time_t remaining_sec = SETUP_MODE_DURATION_SEC - elapsed_sec;
+
+                if (remaining_sec > 0) {
+                    char warning[128];
+                    snprintf(warning, sizeof(warning),
+                            "SETUP MODE: Default password active. %ld min remaining. Change password now!",
+                            (long)(remaining_sec / 60));
+                    cJSON_AddStringToObject(root, "security_warning", warning);
+                    cJSON_AddBoolToObject(root, "setup_mode", true);
+                } else {
+                    cJSON_AddStringToObject(root, "security_warning",
+                        "CRITICAL: Setup mode expired. HTTP UI will be disabled on next restart!");
+                    cJSON_AddBoolToObject(root, "setup_mode", false);
+                }
             }
         } else {
-            cJSON_AddStringToObject(root, "security_warning", "Default password in use! Change immediately.");
+            // No timestamp stored yet - waiting for time sync
+            cJSON_AddStringToObject(root, "security_warning",
+                "Default password in use! Waiting for time sync. Change immediately.");
+            cJSON_AddBoolToObject(root, "setup_mode", true);
         }
     }
 
@@ -1492,20 +1503,44 @@ esp_err_t http_ui_start(void)
                 ESP_LOGI(TAG, "Loaded first boot timestamp from NVS: %lu", (unsigned long)s_first_boot_timestamp);
             } else {
                 // First time ever - record current wall-clock time to NVS
-                s_first_boot_timestamp = time(NULL);
+                // Wait for valid time sync before starting the setup window
+                time_t current_time = time(NULL);
 
-                // Only persist if we have valid time (not 1970)
-                // If time not synced yet, timestamp will be near 0 and setup mode will be very long
-                // This is acceptable - better than blocking UI startup before time sync
-                if (s_first_boot_timestamp > 0) {
+                // Sanity check: valid time is after 2020-01-01 (timestamp > 1577836800)
+                // This prevents starting setup window with clock at epoch
+                if (current_time > 1577836800) {
+                    s_first_boot_timestamp = current_time;
                     config_mgr_set_u32("ui/first_boot_ts", (uint32_t)s_first_boot_timestamp);
                     ESP_LOGW(TAG, "First boot detected - setup mode window started (15 minutes)");
                     ESP_LOGW(TAG, "Stored timestamp: %lu", (unsigned long)s_first_boot_timestamp);
+                } else {
+                    // Time not synced yet - allow access but don't start the window timer
+                    ESP_LOGW(TAG, "========================================");
+                    ESP_LOGW(TAG, "SETUP MODE: Default password accepted");
+                    ESP_LOGW(TAG, "Waiting for time sync to start 15-minute window");
+                    ESP_LOGW(TAG, "Change password immediately via /config");
+                    ESP_LOGW(TAG, "========================================");
+                    // Allow startup but setup window hasn't started yet
+                    goto skip_setup_check;
                 }
             }
         }
 
         time_t current_time = time(NULL);
+
+        // Clamp negative elapsed time (clock reset backwards)
+        // This prevents granting access when clock resets to epoch after a valid timestamp was stored
+        if (current_time < s_first_boot_timestamp) {
+            ESP_LOGE(TAG, "========================================");
+            ESP_LOGE(TAG, "SECURITY ERROR: HTTP UI disabled");
+            ESP_LOGE(TAG, "Clock reset detected (current: %lu < stored: %lu)",
+                     (unsigned long)current_time, (unsigned long)s_first_boot_timestamp);
+            ESP_LOGE(TAG, "Waiting for time sync before allowing setup mode");
+            ESP_LOGE(TAG, "Change password via config_mgr API to enable HTTP UI");
+            ESP_LOGE(TAG, "========================================");
+            return ESP_ERR_INVALID_STATE;
+        }
+
         time_t elapsed_sec = current_time - s_first_boot_timestamp;
 
         if (elapsed_sec < SETUP_MODE_DURATION_SEC) {
@@ -1526,6 +1561,8 @@ esp_err_t http_ui_start(void)
             return ESP_ERR_INVALID_STATE;
         }
     }
+
+skip_setup_check:
 
     // Generate auth digest
     ret = generate_auth_digest(s_auth_user, s_auth_pass, s_auth_digest, sizeof(s_auth_digest));
