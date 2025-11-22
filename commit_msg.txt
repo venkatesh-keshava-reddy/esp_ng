@@ -1,39 +1,18 @@
-fix: address PR feedback on setup mode and WiFi restart recovery
+fix: update status endpoint to use new setup-mode timestamp variables
 
-Resolves two critical issues identified in PR review.
+The status handler still referenced the old variable names that were renamed
+in the previous commit, causing a compilation failure.
 
-Issue 1: Setup mode timestamp resets on reboot
 Problem:
-- Used esp_timer_get_time() (uptime) instead of wall-clock time
-- Uptime resets to 0 on every boot, granting fresh 15-minute window
-- Device with default credentials for hours could restart and regain access
-- Defeated the intended security gate
+- Status endpoint referenced s_first_boot_time_ms (undefined)
+- Status endpoint referenced SETUP_MODE_DURATION_MS (undefined)
+- Build failed due to undefined symbols
+- Setup mode logic was never executed
 
 Solution:
-- Changed to use time(NULL) for Unix timestamp (wall-clock time)
-- Timestamp persists correctly across reboots in NVS
-- Renamed variables: s_first_boot_time_ms → s_first_boot_timestamp
-- Changed duration: SETUP_MODE_DURATION_MS → SETUP_MODE_DURATION_SEC
-- Added graceful handling for pre-time-sync case (extends window but safe)
+- Updated to s_first_boot_timestamp (time_t)
+- Updated to SETUP_MODE_DURATION_SEC (seconds)
+- Changed calculations from milliseconds to seconds
+- Changed format specifiers: %lld → %ld for time_t
 
-Issue 2: WiFi restart doesn't resume reconnects on failure
-Problem:
-- When retry count hits MAX_RETRY_BEFORE_RESTART, timer callback enqueues restart and returns
-- If esp_wifi_start() fails in worker task, no further attempts scheduled
-- Station left permanently offline until manual intervention
-- Previously, backoff loop kept retrying indefinitely
-
-Solution:
-- Worker task now reschedules reconnect timer on restart failure
-- Uses same exponential backoff algorithm (1s → 60s cap)
-- Increments retry counter to prevent tight loops
-- Ensures system never stops trying to recover connectivity
-- Successful restart triggers WIFI_EVENT_STA_START → auto-connect
-
-Files modified:
-- components/http_ui/http_ui.c: Fixed setup mode timestamp to use time(NULL)
-- components/net_mgr/net_mgr.c: Added timer rescheduling in wifi_restart_task
-
-🤖 Generated with [Claude Code](https://claude.com/claude-code)
-
-Co-Authored-By: Claude <noreply@anthropic.com>
+Location: components/http_ui/http_ui.c:568-570 (status_handler)

@@ -565,15 +565,16 @@ static esp_err_t status_get_handler(httpd_req_t* req)
 
     // Security warning if weak password (IMPLEMENTATION_PLAN.md requirement)
     if (config_mgr_has_weak_password()) {
-        if (s_first_boot_time_ms > 0) {
-            int64_t elapsed_ms = (esp_timer_get_time() / 1000) - s_first_boot_time_ms;
-            int64_t remaining_ms = SETUP_MODE_DURATION_MS - elapsed_ms;
+        if (s_first_boot_timestamp > 0) {
+            time_t current_time = time(NULL);
+            time_t elapsed_sec = current_time - s_first_boot_timestamp;
+            time_t remaining_sec = SETUP_MODE_DURATION_SEC - elapsed_sec;
 
-            if (remaining_ms > 0) {
+            if (remaining_sec > 0) {
                 char warning[128];
                 snprintf(warning, sizeof(warning),
-                        "SETUP MODE: Default password active. %lld min remaining. Change password now!",
-                        remaining_ms / 60000);
+                        "SETUP MODE: Default password active. %ld min remaining. Change password now!",
+                        (long)(remaining_sec / 60));
                 cJSON_AddStringToObject(root, "security_warning", warning);
                 cJSON_AddBoolToObject(root, "setup_mode", true);
             } else {
