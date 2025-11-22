@@ -1,29 +1,28 @@
-feat: integrate config_store into app_startup
+fix: mirror NVS semantics exactly for blob size queries
 
-Adds config_store initialization to the generic startup flow.
+Addresses feedback to align config_store_get_blob() with NVS behavior.
+
+Issues fixed:
+1. Blob size query not supported (out == NULL rejected)
+2. Required size not returned on ESP_ERR_NVS_INVALID_LENGTH
 
 Changes:
-- Added config_store_init() in app_startup Phase 1 (before config_mgr)
-- Removed redundant nvs_flash_init() from main.c (now handled by config_store)
-- Added config_store dependency to app_startup CMakeLists.txt
+- Allow out == NULL for size-only queries (mirrors nvs_get_blob)
+- Write required size to *out_len when buffer too small
+- Updated validation: only require out_len != NULL
+- Callers can now discover required size without upfront buffer
 
-Startup order (Phase 1):
-1. config_store_init() - Initialize NVS with auto-erase handling
-2. event_bus_init() - Event system
-3. config_mgr_init() - Configuration manager (will use config_store later)
-4. wdt_mgr_init() - Watchdog manager
+Behavior:
+- config_store_get_blob(ns, key, NULL, &size) -> Returns size in *size
+- config_store_get_blob(ns, key, small_buf, &size) -> Returns ESP_ERR_NVS_INVALID_LENGTH
+  and writes required size to *size
+- config_store_get_blob(ns, key, buf, &size) -> Reads blob and updates *size with actual
 
-Rationale:
-- config_store provides standalone NVS initialization
-- config_mgr will eventually migrate to use config_store APIs
-- Both components coexist during transition period
-- NVS init moved to config_store for better encapsulation
+Testing:
+- Added test_config_store_blob_size_query test case
+- Updated blob_buffer_too_small test to verify *out_len is updated
+- Added <stdlib.h> for malloc/free in tests
 
 Files modified:
-- components/app_startup/app_startup.c
-- components/app_startup/CMakeLists.txt
-- main/main.c
-
-🤖 Generated with [Claude Code](https://claude.com/claude-code)
-
-Co-Authored-By: Claude <noreply@anthropic.com>
+- components/config_store/config_store.c
+- components/config_store/test/test_config_store.c

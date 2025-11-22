@@ -256,15 +256,17 @@ esp_err_t config_store_set_u32(const char* ns, const char* key, uint32_t val)
 
 /**
  * Get blob from NVS
- * On entry, *out_len must contain the size of the output buffer
- * On success, *out_len is updated with actual blob size
+ * Mirrors NVS semantics exactly:
+ * - If out == NULL, returns required size in *out_len (size query)
+ * - If out != NULL and buffer too small, returns ESP_ERR_NVS_INVALID_LENGTH
+ *   and writes required size to *out_len
+ * - On success, *out_len is updated with actual blob size
  * Returns ESP_ERR_NVS_NOT_FOUND if key doesn't exist
- * Returns ESP_ERR_NVS_INVALID_LENGTH if blob won't fit
  */
 esp_err_t config_store_get_blob(const char* ns, const char* key, void* out, size_t* out_len)
 {
-    if (!out || !out_len || *out_len == 0) {
-        ESP_LOGE(TAG, "Invalid output buffer or length pointer");
+    if (!out_len) {
+        ESP_LOGE(TAG, "Length pointer is NULL");
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -293,9 +295,19 @@ esp_err_t config_store_get_blob(const char* ns, const char* key, void* out, size
         return ret;
     }
 
+    // If out == NULL, this is a size query only
+    if (out == NULL) {
+        nvs_close(handle);
+        *out_len = required_size;
+        ESP_LOGD(TAG, "Size query for '%s/%s': %zu bytes", ns, key, required_size);
+        return ESP_OK;
+    }
+
     // Check if buffer is large enough
     if (required_size > *out_len) {
         nvs_close(handle);
+        // Mirror NVS semantics: write required size to *out_len before returning error
+        *out_len = required_size;
         ESP_LOGE(TAG, "Buffer too small for key '%s/%s': need %zu, have %zu",
                  ns, key, required_size, *out_len);
         return ESP_ERR_NVS_INVALID_LENGTH;

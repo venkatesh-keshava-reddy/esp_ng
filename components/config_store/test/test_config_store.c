@@ -3,6 +3,7 @@
 #include "esp_err.h"
 #include "nvs_flash.h"
 #include <string.h>
+#include <stdlib.h>
 
 // Test namespace and keys
 #define TEST_NS "test_ns"
@@ -133,14 +134,38 @@ TEST_CASE("config_store_blob_buffer_too_small", "[config_store]")
     TEST_ASSERT_EQUAL(ESP_OK, config_store_set_blob(TEST_NS, TEST_KEY, test_data, sizeof(test_data)));
 
     // Try to read into too-small buffer
+    // Should return ESP_ERR_NVS_INVALID_LENGTH and update small_len with required size
     esp_err_t ret = config_store_get_blob(TEST_NS, TEST_KEY, small_buf, &small_len);
     TEST_ASSERT_EQUAL(ESP_ERR_NVS_INVALID_LENGTH, ret);
+    TEST_ASSERT_EQUAL_size_t(sizeof(test_data), small_len);  // Required size written to out_len
 
     // Should work with larger buffer
     uint8_t large_buf[16];
     size_t large_len = sizeof(large_buf);
     TEST_ASSERT_EQUAL(ESP_OK, config_store_get_blob(TEST_NS, TEST_KEY, large_buf, &large_len));
     TEST_ASSERT_EQUAL_size_t(sizeof(test_data), large_len);
+}
+
+TEST_CASE("config_store_blob_size_query", "[config_store]")
+{
+    uint8_t test_data[] = {0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF};
+    size_t required_size = 0;
+
+    // Write blob
+    TEST_ASSERT_EQUAL(ESP_OK, config_store_set_blob(TEST_NS, TEST_KEY, test_data, sizeof(test_data)));
+
+    // Query size with out == NULL (mirrors NVS semantics)
+    esp_err_t ret = config_store_get_blob(TEST_NS, TEST_KEY, NULL, &required_size);
+    TEST_ASSERT_EQUAL(ESP_OK, ret);
+    TEST_ASSERT_EQUAL_size_t(sizeof(test_data), required_size);
+
+    // Now allocate correct size and read
+    uint8_t* read_buf = malloc(required_size);
+    size_t read_len = required_size;
+    TEST_ASSERT_EQUAL(ESP_OK, config_store_get_blob(TEST_NS, TEST_KEY, read_buf, &read_len));
+    TEST_ASSERT_EQUAL_size_t(sizeof(test_data), read_len);
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(test_data, read_buf, sizeof(test_data));
+    free(read_buf);
 }
 
 TEST_CASE("config_store_set_if_missing_str", "[config_store]")
