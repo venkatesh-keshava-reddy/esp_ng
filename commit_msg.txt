@@ -1,0 +1,40 @@
+feat: implement feedback improvements for production readiness
+
+Addresses additional feedback items for improved reliability and usability:
+
+1. UDP Broadcast Improvements:
+   - Log level already at DEBUG for routine sends (reduces flash wear)
+   - Made queue size configurable via udp/queue_size (default: 10, max: 50)
+   - Allows handling burst scenarios without dropping packets
+
+2. Network Manager Enhancements:
+   - Cap retry attempts at 20 before full WiFi restart
+   - Prevents long-term stuck states during network issues
+   - Automatic recovery mechanism for persistent failures
+   - Defensive error handling for WiFi restart in timer context
+   - Handles ESP_ERR_WIFI_NOT_STARTED gracefully
+   - Incremental retry on restart failure to prevent tight loops
+
+3. Watchdog Coverage:
+   - Added watchdog registration for UDP broadcast_task
+   - HTTP UI excluded with clear rationale (uses ESP-IDF httpd thread pool)
+   - Documented exclusion criteria in wdt_mgr.h
+
+4. HTTP UI Setup Mode:
+   - Implemented 15-minute setup mode after first boot
+   - Persists timestamp to NVS (survives reboots)
+   - Allows default password for initial configuration only
+   - Reduces support friction while maintaining security
+   - Clear warnings and countdown timer in status endpoint
+   - Setup window doesn't reset on power-cycle
+
+5. Configuration Validation:
+   - UDP: Validate addr/port/mode/ttl at load time
+   - SNTP: Validate server hostname lengths
+   - Prevents runtime failures and noisy retry loops
+   - Automatic fallback to sane defaults
+
+All changes maintain backward compatibility with existing configurations.
+
+Generated with Claude Code
+Co-Authored-By: Claude <noreply@anthropic.com>

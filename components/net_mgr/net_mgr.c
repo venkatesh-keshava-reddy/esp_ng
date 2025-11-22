@@ -21,9 +21,10 @@ static const char *TAG = "net_mgr";
 // Event bits for connection state
 #define WIFI_CONNECTED_BIT BIT0
 
-// Reconnection parameters (exponential backoff, continuous)
+// Reconnection parameters (exponential backoff with cap)
 #define BACKOFF_BASE_MS    1000
 #define BACKOFF_MAX_MS     60000
+#define MAX_RETRY_BEFORE_RESTART 20  // Full WiFi restart after 20 attempts
 
 static esp_netif_t* s_netif = NULL;
 static EventGroupHandle_t s_wifi_event_group = NULL;
@@ -50,7 +51,35 @@ static void reconnect_timer_callback(void* arg)
 {
     (void)arg;
 
-    ESP_LOGI(TAG, "Attempting reconnection (retry %d)", s_retry_num + 1);
+    // Check if we've exceeded max retries - perform full WiFi restart
+    if (s_retry_num >= MAX_RETRY_BEFORE_RESTART) {
+        ESP_LOGW(TAG, "Max retry attempts (%d) exceeded, performing full WiFi restart", MAX_RETRY_BEFORE_RESTART);
+
+        // Defensive WiFi restart from timer context
+        // Stop WiFi - log but continue if it fails (may already be stopped)
+        esp_err_t ret = esp_wifi_stop();
+        if (ret != ESP_OK && ret != ESP_ERR_WIFI_NOT_STARTED) {
+            ESP_LOGW(TAG, "WiFi stop failed: %s (continuing anyway)", esp_err_to_name(ret));
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(1000));  // Brief delay for cleanup
+
+        // Restart WiFi - critical failure if this doesn't work
+        ret = esp_wifi_start();
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "WiFi restart failed: %s - will retry on next attempt", esp_err_to_name(ret));
+            // Don't reset retry counter - will attempt restart again
+            // Increment so we don't get stuck in immediate restart loop
+            s_retry_num++;
+        } else {
+            ESP_LOGI(TAG, "WiFi restarted successfully");
+            // Reset retry counter only on successful restart
+            s_retry_num = 0;
+        }
+        return;
+    }
+
+    ESP_LOGI(TAG, "Attempting reconnection (retry %d/%d)", s_retry_num + 1, MAX_RETRY_BEFORE_RESTART);
     esp_err_t ret = esp_wifi_connect();
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "esp_wifi_connect failed: %s", esp_err_to_name(ret));
