@@ -1,32 +1,28 @@
-fix: clamp setup mode window when clock resets backwards
+fix: clamp clock rollback instead of blocking HTTP UI startup
 
-Prevents indefinite default-password access when RTC is unsynchronized.
+Prevents deadlock when RTC resets after valid timestamp is stored.
 
 Problem:
-- Setup mode calculates elapsed_sec = time(NULL) - s_first_boot_timestamp
-- On batteryless ESP32 devices, clock starts at epoch 0 before SNTP sync
-- If stored timestamp exists, current_time < s_first_boot_timestamp
-- This makes elapsed_sec negative, which passes the < SETUP_MODE_DURATION_SEC check
-- Result: HTTP UI accepts default password indefinitely on every cold boot
-- Defeats the intended one-time 15-minute security window
+- When stored first_boot_timestamp exists and clock resets to epoch (before SNTP)
+- Previous code returned ESP_ERR_INVALID_STATE, blocking http_ui_start
+- app_startup only calls http_ui_start once (doesn't retry after time sync)
+- Result: HTTP UI permanently disabled, user locked out with default password
+- No way to change password because UI never starts
+- Common scenario: power loss on batteryless ESP32 devices
 
 Solution:
-1. First boot validation:
-   - Only start setup window timer if time > 2020-01-01 (timestamp > 1577836800)
-   - Prevents storing epoch timestamps that would cause issues
-   - If time not synced: allow access but don't start timer (wait for SNTP)
+- Treat clock rollback as "setup window expired" instead of fatal error
+- Clamp elapsed_sec to SETUP_MODE_DURATION_SEC + 1 when rollback detected
+- This makes elapsed_sec >= SETUP_MODE_DURATION_SEC, failing the setup check
+- HTTP UI still starts but blocks due to default password (existing behavior)
+- User can change password via config_mgr API
+- After time resyncs, proper elapsed time will be calculated
+- Changed log level from ERROR to WARN for rollback detection
 
-2. Clock reset detection:
-   - Check if current_time < s_first_boot_timestamp before calculating elapsed
-   - Block HTTP UI startup with clear error message
-   - Prevents access after clock reset until time resyncs
+Behavior:
+- Clock rollback: HTTP UI starts but blocks on default password (must use API)
+- Within setup window: HTTP UI accepts default password with countdown
+- After setup window: HTTP UI blocks on default password (must use API)
 
-3. Status endpoint:
-   - Added same clock reset detection in status handler
-   - Shows "Clock reset detected! Waiting for time sync" warning
-   - Marks setup_mode as false when clock reset detected
-
-Files modified:
-- components/http_ui/http_ui.c:1508-1512 (http_ui_start)
-- components/http_ui/http_ui.c:568-570 (status_handler)
+Location: components/http_ui/http_ui.c:1531-1542
 

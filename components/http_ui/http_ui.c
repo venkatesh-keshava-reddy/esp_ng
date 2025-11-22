@@ -1527,21 +1527,22 @@ esp_err_t http_ui_start(void)
         }
 
         time_t current_time = time(NULL);
+        time_t elapsed_sec;
 
         // Clamp negative elapsed time (clock reset backwards)
-        // This prevents granting access when clock resets to epoch after a valid timestamp was stored
+        // Treat rollback as infinite elapsed time (setup window expired)
+        // This allows HTTP UI to start so user can change password via API
         if (current_time < s_first_boot_timestamp) {
-            ESP_LOGE(TAG, "========================================");
-            ESP_LOGE(TAG, "SECURITY ERROR: HTTP UI disabled");
-            ESP_LOGE(TAG, "Clock reset detected (current: %lu < stored: %lu)",
+            ESP_LOGW(TAG, "========================================");
+            ESP_LOGW(TAG, "Clock reset detected (current: %lu < stored: %lu)",
                      (unsigned long)current_time, (unsigned long)s_first_boot_timestamp);
-            ESP_LOGE(TAG, "Waiting for time sync before allowing setup mode");
-            ESP_LOGE(TAG, "Change password via config_mgr API to enable HTTP UI");
-            ESP_LOGE(TAG, "========================================");
-            return ESP_ERR_INVALID_STATE;
+            ESP_LOGW(TAG, "Treating as setup window expired until time resyncs");
+            ESP_LOGW(TAG, "========================================");
+            // Clamp to large value so setup window is considered expired
+            elapsed_sec = SETUP_MODE_DURATION_SEC + 1;
+        } else {
+            elapsed_sec = current_time - s_first_boot_timestamp;
         }
-
-        time_t elapsed_sec = current_time - s_first_boot_timestamp;
 
         if (elapsed_sec < SETUP_MODE_DURATION_SEC) {
             time_t remaining_min = (SETUP_MODE_DURATION_SEC - elapsed_sec) / 60;
