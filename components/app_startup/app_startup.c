@@ -1,5 +1,6 @@
 #include "app_startup.h"
 #include "esp_log.h"
+#include "config_store.h"
 #include "event_bus.h"
 #include "config_mgr.h"
 #include "wdt_mgr.h"
@@ -23,6 +24,10 @@ void app_startup_run_generic(void) {
     // Phase 1: Core Infrastructure (no dependencies)
     // ========================================
     ESP_LOGI(TAG, "Phase 1: Initializing core infrastructure...");
+
+    // Initialize NVS storage first (config_store wraps NVS)
+    ESP_ERROR_CHECK(config_store_init());
+    ESP_LOGI(TAG, "  [✓] Config store initialized (NVS)");
 
     ESP_ERROR_CHECK(event_bus_init());
     ESP_LOGI(TAG, "  [✓] Event bus initialized");

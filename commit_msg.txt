@@ -1,36 +1,28 @@
-fix: allow HTTP UI startup during clock rollback with default password
+fix: mirror NVS semantics exactly for blob size queries
 
-Prevents permanent lockout when RTC resets after timestamp is stored.
+Addresses feedback to align config_store_get_blob() with NVS behavior.
 
-Problem:
-- Previous fix clamped elapsed_sec to SETUP_MODE_DURATION_SEC + 1 during rollback
-- This made elapsed_sec >= SETUP_MODE_DURATION_SEC, triggering the expired check
-- Expired check returns ESP_ERR_INVALID_STATE, blocking HTTP UI startup
-- Result: User still locked out - contradicted stated intent
-- Common on batteryless ESP32 devices after power loss
+Issues fixed:
+1. Blob size query not supported (out == NULL rejected)
+2. Required size not returned on ESP_ERR_NVS_INVALID_LENGTH
 
-Root cause analysis:
-Cannot reliably determine if setup window truly expired during clock rollback:
-- Clock at epoch (time=0) < stored timestamp (e.g., time=1700000000)
-- Actual elapsed time is unknown until SNTP resyncs
-- Safer to allow temporary access than permanent lockout
+Changes:
+- Allow out == NULL for size-only queries (mirrors nvs_get_blob)
+- Write required size to *out_len when buffer too small
+- Updated validation: only require out_len != NULL
+- Callers can now discover required size without upfront buffer
 
-Solution:
-- Clock rollback: Fall through weak password check (don't return error)
-- Allows HTTP UI to start with default password during rollback
-- After time resyncs, proper elapsed time validation resumes
-- User can change password via HTTP UI during rollback period
-- If setup window was actually expired, next boot will block (after time sync)
+Behavior:
+- config_store_get_blob(ns, key, NULL, &size) -> Returns size in *size
+- config_store_get_blob(ns, key, small_buf, &size) -> Returns ESP_ERR_NVS_INVALID_LENGTH
+  and writes required size to *size
+- config_store_get_blob(ns, key, buf, &size) -> Reads blob and updates *size with actual
 
-Code flow:
-1. Clock rollback detected → Log warning → Fall through (no return)
-2. Normal time + within window → Log setup mode → Fall through (no return)
-3. Normal time + expired → Log error → return ESP_ERR_INVALID_STATE (blocks UI)
+Testing:
+- Added test_config_store_blob_size_query test case
+- Updated blob_buffer_too_small test to verify *out_len is updated
+- Added <stdlib.h> for malloc/free in tests
 
-Security trade-off:
-- Accept temporary window extension during clock rollback
-- Better than permanent lockout requiring hardware/API intervention
-- Window auto-corrects after time resync
-
-Location: components/http_ui/http_ui.c:1531-1568
-
+Files modified:
+- components/config_store/config_store.c
+- components/config_store/test/test_config_store.c

@@ -3,6 +3,7 @@ idf_component_register(
     INCLUDE_DIRS "include"
     REQUIRES
         freertos
+        config_store
         event_bus
         config_mgr
         wdt_mgr
