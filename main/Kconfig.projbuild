@@ -1,0 +1,13 @@
+menu "Application Configuration"
+
+    config RUN_UNIT_TESTS
+        bool "Enable Unity Test Menu"
+        default n
+        help
+            Enable the Unity test menu in main.c instead of running the normal application.
+            When enabled, the device will boot into an interactive test menu where you can
+            run unit tests from all components.
+
+            This is useful for development and testing. Disable for production builds.
+
+endmenu

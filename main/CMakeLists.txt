@@ -7,4 +7,5 @@ idf_component_register(
         esp_netif
         version
         app_startup
+        unity
 )
