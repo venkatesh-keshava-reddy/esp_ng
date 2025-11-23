@@ -5,6 +5,10 @@
 #include "esp_log.h"
 #include "esp_event.h"
 #include "esp_netif.h"
+#include "esp_system.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "nvs_flash.h"
 
 // Component headers
 #include "version.h"
@@ -27,6 +31,7 @@ void app_main(void)
     ESP_LOGI(TAG, "========================================");
 
     // Initialize minimal services needed by tests
+    ESP_ERROR_CHECK(nvs_flash_init());
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
