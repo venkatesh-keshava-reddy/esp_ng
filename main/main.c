@@ -11,16 +11,7 @@
 #include "app_startup.h"
 
 #ifdef CONFIG_RUN_UNIT_TESTS
-#include "unity.h"
-
-// Unity test runner
-static void run_all_tests(void)
-{
-    // Run all tests automatically
-    UNITY_BEGIN();
-    unity_run_all_tests();
-    UNITY_END();
-}
+#include "test_harness.h"
 #endif
 
 static const char *TAG = "main";
@@ -31,17 +22,21 @@ void app_main(void)
     ESP_LOGI(TAG, "Version: %s", version_get_string());
 
 #ifdef CONFIG_RUN_UNIT_TESTS
-    ESP_LOGI(TAG, "====================================");
-    ESP_LOGI(TAG, "UNIT TEST MODE");
-    ESP_LOGI(TAG, "====================================");
+    ESP_LOGI(TAG, "========================================");
+    ESP_LOGI(TAG, "           UNIT TEST MODE");
+    ESP_LOGI(TAG, "========================================");
 
-    // Initialize basic infrastructure for tests
+    // Initialize minimal services needed by tests
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
-    // Run Unity test menu
-    run_all_tests();
-    return;
+    // Run component test harness with component grouping
+    test_harness_run();
+
+    // Reboot to re-enter test menu (no app startup in test builds)
+    ESP_LOGI(TAG, "Test harness exited. Rebooting into test menu...");
+    vTaskDelay(pdMS_TO_TICKS(1000)); // Brief delay to see the message
+    esp_restart();
 #endif
 
     // Initialize networking stack

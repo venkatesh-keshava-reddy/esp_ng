@@ -7,5 +7,6 @@ idf_component_register(
         esp_netif
         version
         app_startup
-        unity
+    PRIV_REQUIRES
+        test_harness
 )
